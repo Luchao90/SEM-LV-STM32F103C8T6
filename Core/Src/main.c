@@ -52,6 +52,13 @@ const osThreadAttr_t heartbeat_attributes = {
 };
 /* USER CODE BEGIN PV */
 
+osThreadId_t semaphoreHandle;
+const osThreadAttr_t semaphore_attributes = {
+  .name = "semaphore",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -61,6 +68,8 @@ static void MX_USART1_UART_Init(void);
 void heartbeatTask(void *argument);
 
 /* USER CODE BEGIN PFP */
+
+void semaphoreTask(void *argument);
 
 /* USER CODE END PFP */
 
@@ -126,7 +135,9 @@ int main(void)
   heartbeatHandle = osThreadNew(heartbeatTask, NULL, &heartbeat_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
+
+  semaphoreHandle = osThreadNew(semaphoreTask, NULL, &semaphore_attributes);
+
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -259,6 +270,84 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+#define TIME_DEFAULT_STEP_1   3000
+#define TIME_DEFAULT_STEP_2   500
+#define TIME_DEFAULT_STEP_3   2000
+#define TIME_DEFAULT_STEP_4   1000
+#define TIME_SEQUENCE_ALERT   500
+#define TIME_STARTUP_TEST     500
+
+typedef enum {
+  SEQUENCE_ALERT,
+  SEQUENCE_NORMAL,
+  SEQUENCE_QTY
+} semaphore_sequences_t;
+
+semaphore_sequences_t sequence_selected = SEQUENCE_ALERT;
+
+void semaphoreTask(void *argument)
+{
+  /* Startup sequence */
+  HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_SET);
+  osDelay(TIME_STARTUP_TEST);
+
+  HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_SET);
+  osDelay(TIME_STARTUP_TEST);
+
+  HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_RESET);
+  osDelay(TIME_STARTUP_TEST);
+
+  while(1)
+  {
+
+    switch (sequence_selected)
+    {
+    case SEQUENCE_ALERT:
+      HAL_GPIO_TogglePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin);
+      HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_SET);
+      osDelay(TIME_SEQUENCE_ALERT);
+      break;
+
+    case SEQUENCE_NORMAL:
+      /* Step 1 */
+      HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_SET);
+      osDelay(TIME_DEFAULT_STEP_1);
+
+      /* Step 2 */
+      HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_SET);
+      osDelay(TIME_DEFAULT_STEP_2);
+
+      /* Step 3 */
+      HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_RESET);
+      osDelay(TIME_DEFAULT_STEP_3);
+
+      /* Step 4 */
+      HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_SET);
+      osDelay(TIME_DEFAULT_STEP_4);
+      break;
+    
+    default:
+      osDelay(TIME_SEQUENCE_ALERT);
+      break;
+    }
+  }
+}
 
 /* USER CODE END 4 */
 
