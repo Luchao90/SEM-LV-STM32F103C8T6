@@ -23,6 +23,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
+#include "string.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -38,10 +40,62 @@
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 #define HEARTBEAT_TIME  250
+
+#define TIME_DEFAULT_STEP_1   3000
+#define TIME_DEFAULT_STEP_2   500
+#define TIME_DEFAULT_STEP_3   2000
+#define TIME_DEFAULT_STEP_4   1000
+#define TIME_SEQUENCE_ALERT   500
+#define TIME_STARTUP_TEST     500
+#define TIME_STATUS           5000
+
+#define FLAG_STATUS_CHANGED   0x0000001
+
+typedef enum sequences {
+  SEQUENCE_STARTUP,
+  SEQUENCE_ALERT,
+  SEQUENCE_NORMAL,
+  SEQUENCE_QTY
+} sequences_t;
+
+const char *sequences_names[SEQUENCE_QTY] = {
+  "STARTUP",
+  "ALERT",
+  "NORMAL",
+};
+
+typedef enum color {
+  COLOR_BLACK,
+  COLOR_RED,
+  COLOR_RED_YELLOW,
+  COLOR_YELLOW,
+  COLOR_GREEN,
+  COLOR_QTY
+} color_t;
+
+const char *color_names[COLOR_QTY] = {
+  "BLACK",
+  "RED",
+  "RED_YELLOW",
+  "YELLOW",
+  "GREEN",
+};
+
+typedef struct {
+  sequences_t sequence;
+  color_t color;
+} status_t;
+
+status_t semaphore_status = {
+  .sequence = SEQUENCE_STARTUP,
+  .color = COLOR_RED,
+};
+
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 UART_HandleTypeDef huart1;
+DMA_HandleTypeDef hdma_usart1_tx;
 
 /* Definitions for heartbeat */
 osThreadId_t heartbeatHandle;
@@ -49,6 +103,11 @@ const osThreadAttr_t heartbeat_attributes = {
   .name = "heartbeat",
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for defaultQueue */
+osMessageQueueId_t defaultQueueHandle;
+const osMessageQueueAttr_t defaultQueue_attributes = {
+  .name = "defaultQueue"
 };
 /* USER CODE BEGIN PV */
 
@@ -59,17 +118,32 @@ const osThreadAttr_t semaphore_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 
+osThreadId_t statusHandle;
+const osThreadAttr_t status_attributes = {
+  .name = "status",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+
+osMessageQueueId_t statusQueueHandle;
+const osMessageQueueAttr_t statusQueue_attributes = {
+  .name = "statusQueue"
+};
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_USART1_UART_Init(void);
 void heartbeatTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 
 void semaphoreTask(void *argument);
+
+void statusTask(void *argument);
 
 /* USER CODE END PFP */
 
@@ -106,6 +180,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
 
@@ -126,8 +201,14 @@ int main(void)
   /* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
 
+  /* Create the queue(s) */
+  /* creation of defaultQueue */
+  defaultQueueHandle = osMessageQueueNew (1, sizeof(uint16_t), &defaultQueue_attributes);
+
   /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
+
+  statusQueueHandle = osMessageQueueNew (4, sizeof(status_t), &statusQueue_attributes);
+
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -137,6 +218,8 @@ int main(void)
   /* USER CODE BEGIN RTOS_THREADS */
 
   semaphoreHandle = osThreadNew(semaphoreTask, NULL, &semaphore_attributes);
+
+  statusHandle = osThreadNew(statusTask, NULL, &status_attributes);
 
   /* USER CODE END RTOS_THREADS */
 
@@ -229,6 +312,22 @@ static void MX_USART1_UART_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel4_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel4_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel4_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -271,48 +370,55 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-#define TIME_DEFAULT_STEP_1   3000
-#define TIME_DEFAULT_STEP_2   500
-#define TIME_DEFAULT_STEP_3   2000
-#define TIME_DEFAULT_STEP_4   1000
-#define TIME_SEQUENCE_ALERT   500
-#define TIME_STARTUP_TEST     500
-
-typedef enum {
-  SEQUENCE_ALERT,
-  SEQUENCE_NORMAL,
-  SEQUENCE_QTY
-} semaphore_sequences_t;
-
-semaphore_sequences_t sequence_selected = SEQUENCE_ALERT;
-
 void semaphoreTask(void *argument)
 {
   /* Startup sequence */
   HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_SET);
   HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_SET);
+  semaphore_status.sequence = SEQUENCE_STARTUP;
+  semaphore_status.color = COLOR_RED;
+  osMessageQueuePut(statusQueueHandle, &semaphore_status.sequence, 0, 0);
   osDelay(TIME_STARTUP_TEST);
 
   HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_SET);
   HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_SET);
+  semaphore_status.color = COLOR_YELLOW;
+  osMessageQueuePut(statusQueueHandle, &semaphore_status.sequence, 0, 0);
   osDelay(TIME_STARTUP_TEST);
 
   HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_SET);
   HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_SET);
   HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_RESET);
+  semaphore_status.color = COLOR_GREEN;
+  osMessageQueuePut(statusQueueHandle, &semaphore_status.sequence, 0, 0);
   osDelay(TIME_STARTUP_TEST);
+
+  semaphore_status.sequence = SEQUENCE_NORMAL;
+  osMessageQueuePut(statusQueueHandle, &semaphore_status.sequence, 0, 0);
 
   while(1)
   {
 
-    switch (sequence_selected)
+    switch (semaphore_status.sequence)
     {
     case SEQUENCE_ALERT:
-      HAL_GPIO_TogglePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin);
       HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_SET);
       HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_SET);
+
+      if (COLOR_RED == semaphore_status.color)
+      {
+        HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_SET);
+        semaphore_status.color = COLOR_BLACK;
+      }
+      else
+      {
+        HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_RESET);
+        semaphore_status.color = COLOR_RED;        
+      }
+
+      osMessageQueuePut(statusQueueHandle, &semaphore_status.sequence, 0, 0);
       osDelay(TIME_SEQUENCE_ALERT);
       break;
 
@@ -321,24 +427,32 @@ void semaphoreTask(void *argument)
       HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_RESET);
       HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_SET);
       HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_SET);
+      semaphore_status.color = COLOR_RED;
+      osMessageQueuePut(statusQueueHandle, &semaphore_status.sequence, 0, 0);
       osDelay(TIME_DEFAULT_STEP_1);
 
       /* Step 2 */
       HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_RESET);
       HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_RESET);
       HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_SET);
+      semaphore_status.color = COLOR_RED_YELLOW;
+      osMessageQueuePut(statusQueueHandle, &semaphore_status.sequence, 0, 0);      
       osDelay(TIME_DEFAULT_STEP_2);
 
       /* Step 3 */
       HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_SET);
       HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_SET);
       HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_RESET);
+      semaphore_status.color = COLOR_GREEN;
+      osMessageQueuePut(statusQueueHandle, &semaphore_status.sequence, 0, 0);      
       osDelay(TIME_DEFAULT_STEP_3);
 
       /* Step 4 */
       HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_SET);
       HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_RESET);
       HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_SET);
+      semaphore_status.color = COLOR_YELLOW;
+      osMessageQueuePut(statusQueueHandle, &semaphore_status.sequence, 0, 0);      
       osDelay(TIME_DEFAULT_STEP_4);
       break;
     
@@ -347,6 +461,35 @@ void semaphoreTask(void *argument)
       break;
     }
   }
+}
+
+void statusTask(void *argument)
+{
+    status_t status_actual; 
+    /* Infinite loop */
+    for (;;)
+    {
+        osMessageQueueGet(statusQueueHandle, &status_actual, NULL, TIME_STATUS);
+        HAL_UART_Transmit(&huart1, 
+                          (uint8_t *)(sequences_names[status_actual.sequence]),
+                          strlen(sequences_names[status_actual.sequence]), 
+                          100);
+
+        HAL_UART_Transmit(&huart1, 
+                          (uint8_t *)(" - "),
+                          sizeof(" - ") - 1, 
+                          100);
+
+        HAL_UART_Transmit(&huart1, 
+                          (uint8_t *)(color_names[status_actual.color]),
+                          strlen(color_names[status_actual.color]), 
+                          100);
+
+        HAL_UART_Transmit(&huart1, 
+                          (uint8_t *)("\n"),
+                          sizeof("\n") - 1, 
+                          100);                           
+    }
 }
 
 /* USER CODE END 4 */
