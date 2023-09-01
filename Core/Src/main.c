@@ -499,7 +499,15 @@ void statusTask(void *argument)
     /* Infinite loop */
     for (;;)
     {
-        osMessageQueueGet(statusQueueHandle, &status_actual, NULL, TIME_STATUS);
+        osStatus_t osStatus = osMessageQueueGet(statusQueueHandle, &status_actual, NULL, TIME_STATUS);
+        
+        if (osStatus < osOK) {
+          HAL_UART_Transmit(&huart1, 
+                  (uint8_t *)(" OK: "),
+                  sizeof(" OK: ") - 1, 
+                  100);
+        }
+
         HAL_UART_Transmit(&huart1, 
                           (uint8_t *)(sequences_names[status_actual.sequence]),
                           strlen(sequences_names[status_actual.sequence]), 
