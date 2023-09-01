@@ -41,15 +41,16 @@
 /* USER CODE BEGIN PM */
 #define HEARTBEAT_TIME  250
 
-#define TIME_DEFAULT_STEP_1   3000
-#define TIME_DEFAULT_STEP_2   500
-#define TIME_DEFAULT_STEP_3   2000
-#define TIME_DEFAULT_STEP_4   1000
+#define TIME_DEFAULT_STEP_1   6000
+#define TIME_DEFAULT_STEP_2   1000
+#define TIME_DEFAULT_STEP_3   3000
+#define TIME_DEFAULT_STEP_4   2000
 #define TIME_SEQUENCE_ALERT   500
 #define TIME_STARTUP_TEST     500
 #define TIME_STATUS           5000
 
-#define FLAG_STATUS_CHANGED   0x0000001
+#define TIME_REQUEST_MIN      1000
+#define FLAG_REQUEST          0x0000001
 
 typedef enum sequences {
   SEQUENCE_STARTUP,
@@ -81,14 +82,22 @@ const char *color_names[COLOR_QTY] = {
   "GREEN",
 };
 
+typedef enum request {
+  REQUEST_NONE,
+  REQUEST_SEQUENCE_CHANGE,
+  REQUEST_QTY
+} request_t;
+
 typedef struct {
   sequences_t sequence;
   color_t color;
+  request_t request;
 } status_t;
 
 status_t semaphore_status = {
   .sequence = SEQUENCE_STARTUP,
   .color = COLOR_RED,
+  .request = REQUEST_NONE,
 };
 
 /* USER CODE END PM */
@@ -125,6 +134,13 @@ const osThreadAttr_t status_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 
+osThreadId_t requestHandle;
+const osThreadAttr_t request_attributes = {
+  .name = "request",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+
 osMessageQueueId_t statusQueueHandle;
 const osMessageQueueAttr_t statusQueue_attributes = {
   .name = "statusQueue"
@@ -144,6 +160,8 @@ void heartbeatTask(void *argument);
 void semaphoreTask(void *argument);
 
 void statusTask(void *argument);
+
+void requestTask(void *argument);
 
 /* USER CODE END PFP */
 
@@ -220,6 +238,8 @@ int main(void)
   semaphoreHandle = osThreadNew(semaphoreTask, NULL, &semaphore_attributes);
 
   statusHandle = osThreadNew(statusTask, NULL, &status_attributes);
+
+  requestHandle = osThreadNew(requestTask, NULL, &request_attributes);
 
   /* USER CODE END RTOS_THREADS */
 
@@ -364,6 +384,16 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
+  /*Configure GPIO pins : RF_B_Pin RF_A_Pin */
+  GPIO_InitStruct.Pin = RF_B_Pin|RF_A_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
+
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
 }
@@ -372,37 +402,37 @@ static void MX_GPIO_Init(void)
 
 void semaphoreTask(void *argument)
 {
-  /* Startup sequence */
-  HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_SET);
-  semaphore_status.sequence = SEQUENCE_STARTUP;
-  semaphore_status.color = COLOR_RED;
-  osMessageQueuePut(statusQueueHandle, &semaphore_status.sequence, 0, 0);
-  osDelay(TIME_STARTUP_TEST);
-
-  HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_SET);
-  semaphore_status.color = COLOR_YELLOW;
-  osMessageQueuePut(statusQueueHandle, &semaphore_status.sequence, 0, 0);
-  osDelay(TIME_STARTUP_TEST);
-
-  HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_RESET);
-  semaphore_status.color = COLOR_GREEN;
-  osMessageQueuePut(statusQueueHandle, &semaphore_status.sequence, 0, 0);
-  osDelay(TIME_STARTUP_TEST);
-
-  semaphore_status.sequence = SEQUENCE_NORMAL;
-  osMessageQueuePut(statusQueueHandle, &semaphore_status.sequence, 0, 0);
-
   while(1)
   {
-
     switch (semaphore_status.sequence)
-    {
+    { 
+    case SEQUENCE_STARTUP:
+      /* Startup sequence */
+      HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_SET);
+      semaphore_status.color = COLOR_RED;
+      osMessageQueuePut(statusQueueHandle, &semaphore_status.sequence, 0, 0);
+      osDelay(TIME_STARTUP_TEST);
+
+      HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_SET);
+      semaphore_status.color = COLOR_YELLOW;
+      osMessageQueuePut(statusQueueHandle, &semaphore_status.sequence, 0, 0);
+      osDelay(TIME_STARTUP_TEST);
+
+      HAL_GPIO_WritePin(LIGHT_RED_GPIO_Port, LIGHT_RED_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_RESET);
+      semaphore_status.color = COLOR_GREEN;
+      osMessageQueuePut(statusQueueHandle, &semaphore_status.sequence, 0, 0);
+      osDelay(TIME_STARTUP_TEST);
+
+      semaphore_status.sequence = SEQUENCE_ALERT;
+      osMessageQueuePut(statusQueueHandle, &semaphore_status.sequence, 0, 0);
+      break;
+
     case SEQUENCE_ALERT:
       HAL_GPIO_WritePin(LIGHT_YELLOW_GPIO_Port, LIGHT_YELLOW_Pin, GPIO_PIN_SET);
       HAL_GPIO_WritePin(LIGHT_GREEN_GPIO_Port, LIGHT_GREEN_Pin, GPIO_PIN_SET);
@@ -490,6 +520,43 @@ void statusTask(void *argument)
                           sizeof("\n") - 1, 
                           100);                           
     }
+}
+
+void requestTask(void *argument)
+{
+    int32_t EventsFlags = osError;
+    const uint32_t WaitingEventsFlags = 0x00000001U; /* Only 1 flag may unblock this task */
+    const TickType_t xMaxBlockTime = pdMS_TO_TICKS(5000);
+
+    /* Infinite loop */
+    for (;;)
+    {
+        EventsFlags = osThreadFlagsWait(WaitingEventsFlags, osFlagsWaitAny, xMaxBlockTime);
+
+        if (EventsFlags >= osOK)
+        {
+            /* A notification was received.  See which bits were set. */
+            if ((EventsFlags & FLAG_REQUEST) != 0)
+            {
+                osThreadTerminate(semaphoreHandle);
+                semaphoreHandle = osThreadNew(semaphoreTask, NULL, &semaphore_attributes);
+                semaphore_status.sequence = (SEQUENCE_ALERT == semaphore_status.sequence) ? SEQUENCE_NORMAL : SEQUENCE_ALERT;
+                osMessageQueuePut(statusQueueHandle, &semaphore_status.sequence, 0, 0);
+            }
+        }
+        else
+        {
+            /* Did not receive a notification within the expected time. */
+            //prvCheckForErrors();
+        }
+
+        osDelay(TIME_REQUEST_MIN);
+    }
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  osThreadFlagsSet(requestHandle, FLAG_REQUEST);
 }
 
 /* USER CODE END 4 */

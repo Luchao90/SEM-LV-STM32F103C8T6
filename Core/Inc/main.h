@@ -65,6 +65,12 @@ void Error_Handler(void);
 #define LIGHT_YELLOW_GPIO_Port GPIOB
 #define LIGHT_GREEN_Pin GPIO_PIN_14
 #define LIGHT_GREEN_GPIO_Port GPIOB
+#define RF_B_Pin GPIO_PIN_8
+#define RF_B_GPIO_Port GPIOB
+#define RF_B_EXTI_IRQn EXTI9_5_IRQn
+#define RF_A_Pin GPIO_PIN_9
+#define RF_A_GPIO_Port GPIOB
+#define RF_A_EXTI_IRQn EXTI9_5_IRQn
 
 /* USER CODE BEGIN Private defines */
 
